@@ -3,6 +3,7 @@ from flask import Flask, jsonify, request
 from pathlib import Path
 import random
 import json
+import csv
 
 app = Flask(__name__)
 
@@ -15,6 +16,7 @@ class EloRanker:
         self.history = []
         self.pair_sequence = []
         self.current_index = -1
+        self.strategy = 'random'
     
     def expected_score(self, rating_a, rating_b):
         return 1 / (1 + 10 ** ((rating_b - rating_a) / 400))
@@ -55,19 +57,25 @@ class EloRanker:
             return self.pair_sequence[self.current_index]
         return None
     
-    def get_next_pair(self, strategy='random'):
-        # If we're in the middle of history, move forward
+    def get_next_pair(self):
         if self.current_index + 1 < len(self.pair_sequence):
             self.current_index += 1
             return self.pair_sequence[self.current_index]
         
-        # Otherwise generate new pair
-        if strategy == 'random':
+        if self.strategy == 'random':
             pair = random.sample(self.items, 2)
-        elif strategy == 'close':
+        elif self.strategy == 'close':
             sorted_items = sorted(self.items, key=lambda x: self.ratings[x])
             idx = random.randint(0, len(sorted_items) - 2)
             pair = [sorted_items[idx], sorted_items[idx + 1]]
+        elif self.strategy == 'weighted':
+            items_list = list(self.items)
+            item_a = random.choice(items_list)
+            rating_a = self.ratings[item_a]
+            candidates = [i for i in items_list if i != item_a]
+            weights = [1 / (1 + abs(self.ratings[i] - rating_a) / 100) for i in candidates]
+            item_b = random.choices(candidates, weights=weights)[0]
+            pair = [item_a, item_b]
         
         self.pair_sequence = self.pair_sequence[:self.current_index + 1]
         self.pair_sequence.append(pair)
@@ -78,16 +86,55 @@ class EloRanker:
     def get_rankings(self):
         return sorted(self.ratings.items(), key=lambda x: x[1], reverse=True)
     
-    def save_state(self, filepath):
-        state = {
-            'ratings': self.ratings,
-            'comparisons': self.comparisons,
-            'items': self.items
-        }
-        Path(filepath).write_text(json.dumps(state, indent=2))
+    def save_to_csv(self, filepath):
+        with open(filepath, 'w', newline='') as f:
+            writer = csv.writer(f)
+            writer.writerow(['item', 'rating'])
+            for item, rating in sorted(self.ratings.items()):
+                writer.writerow([item, rating])
+    
+    def load_from_csv(self, filepath):
+        if not Path(filepath).exists():
+            return
+        with open(filepath, 'r') as f:
+            reader = csv.DictReader(f)
+            for row in reader:
+                item = row['item']
+                if item in self.ratings:
+                    self.ratings[item] = float(row['rating'])
 
-actresses = Path('actresses.txt').read_text().strip().split('\n')
-ranker = EloRanker(actresses)
+# Database management
+DB_DIR = Path('databases')
+DB_DIR.mkdir(exist_ok=True)
+
+rankers = {}
+current_db = None
+
+def get_databases():
+    return [f.stem for f in DB_DIR.glob('*.txt')]
+
+def load_database(db_name):
+    global current_db, rankers
+    
+    if db_name in rankers:
+        current_db = db_name
+        return rankers[db_name]
+    
+    db_file = DB_DIR / f'{db_name}.txt'
+    items = db_file.read_text().strip().split('\n')
+    
+    ranker = EloRanker(items)
+    csv_file = DB_DIR / f'{db_name}_ratings.csv'
+    ranker.load_from_csv(csv_file)
+    
+    rankers[db_name] = ranker
+    current_db = db_name
+    return ranker
+
+# Initialize with first available database
+databases = get_databases()
+if databases:
+    load_database(databases[0])
 
 HTML = """<!DOCTYPE html>
 <html>
@@ -100,6 +147,22 @@ HTML = """<!DOCTYPE html>
             margin: 50px auto;
             background: #000;
             color: #0f0;
+        }
+        .controls {
+            text-align: center;
+            margin: 20px 0;
+        }
+        select {
+            background: #000;
+            color: #0f0;
+            border: 2px solid #0f0;
+            padding: 10px;
+            font-family: monospace;
+            font-size: 16px;
+            margin: 0 10px;
+        }
+        label {
+            margin-right: 5px;
         }
         .comparison {
             display: flex;
@@ -158,6 +221,18 @@ HTML = """<!DOCTYPE html>
     </style>
 </head>
 <body>
+    <div class="controls">
+        <label>Database: </label>
+        <select id="dbSelect" onchange="switchDatabase()"></select>
+        
+        <label>Strategy: </label>
+        <select id="strategySelect" onchange="changeStrategy()">
+            <option value="random">Random</option>
+            <option value="weighted">Weighted (prefer close)</option>
+            <option value="close">Adjacent only</option>
+        </select>
+    </div>
+
     <div class="instructions">
         LEFT ARROW = left | RIGHT ARROW = right | DOWN ARROW = skip/tie | UP ARROW = back
     </div>
@@ -170,7 +245,6 @@ HTML = """<!DOCTYPE html>
     <div class="stats">
         <div>Comparisons: <span id="count">0</span></div>
         <button onclick="toggleFullRankings()">Toggle Full Rankings</button>
-        <button onclick="saveState()">Save</button>
     </div>
     
     <div class="top-ten">
@@ -186,6 +260,37 @@ HTML = """<!DOCTYPE html>
     <script>
         let currentPair = [];
         let comparisonCount = 0;
+        
+        async function loadDatabases() {
+            const resp = await fetch('/databases');
+            const data = await resp.json();
+            const select = document.getElementById('dbSelect');
+            select.innerHTML = data.databases
+                .map(db => `<option value="${db}" ${db === data.current ? 'selected' : ''}>${db}</option>`)
+                .join('');
+        }
+        
+        async function switchDatabase() {
+            const db = document.getElementById('dbSelect').value;
+            await fetch('/switch_db', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({database: db})
+            });
+            comparisonCount = 0;
+            document.getElementById('count').textContent = comparisonCount;
+            await updateRankings();
+            loadPair();
+        }
+        
+        async function changeStrategy() {
+            const strategy = document.getElementById('strategySelect').value;
+            await fetch('/set_strategy', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({strategy: strategy})
+            });
+        }
         
         function displayPair(pair) {
             currentPair = pair;
@@ -254,11 +359,6 @@ HTML = """<!DOCTYPE html>
             }
         }
         
-        async function saveState() {
-            await fetch('/save');
-            alert('Saved');
-        }
-        
         document.addEventListener('keydown', (e) => {
             if (e.key === 'ArrowLeft') {
                 e.preventDefault();
@@ -281,6 +381,7 @@ HTML = """<!DOCTYPE html>
         document.getElementById('left').addEventListener('click', () => submitComparison('left'));
         document.getElementById('right').addEventListener('click', () => submitComparison('right'));
         
+        loadDatabases();
         loadPair();
         updateRankings();
     </script>
@@ -291,9 +392,29 @@ HTML = """<!DOCTYPE html>
 def index():
     return HTML
 
+@app.route('/databases')
+def databases_endpoint():
+    return jsonify({
+        'databases': get_databases(),
+        'current': current_db
+    })
+
+@app.route('/switch_db', methods=['POST'])
+def switch_db():
+    db_name = request.json['database']
+    load_database(db_name)
+    return jsonify({'success': True})
+
+@app.route('/set_strategy', methods=['POST'])
+def set_strategy():
+    strategy = request.json['strategy']
+    rankers[current_db].strategy = strategy
+    return jsonify({'success': True})
+
 @app.route('/get_pair')
 def get_pair():
-    pair = ranker.get_next_pair(strategy='random')
+    ranker = rankers[current_db]
+    pair = ranker.get_next_pair()
     return jsonify({'pair': pair})
 
 @app.route('/submit_comparison', methods=['POST'])
@@ -303,6 +424,8 @@ def submit_comparison():
     left = data['left']
     right = data['right']
     
+    ranker = rankers[current_db]
+    
     if result == 'left':
         ranker.update_ratings(left, right)
     elif result == 'right':
@@ -310,23 +433,25 @@ def submit_comparison():
     elif result == 'tie':
         ranker.record_tie(left, right)
     
+    csv_file = DB_DIR / f'{current_db}_ratings.csv'
+    ranker.save_to_csv(csv_file)
+    
     return jsonify({'success': True})
 
 @app.route('/go_back', methods=['POST'])
 def go_back():
+    ranker = rankers[current_db]
     pair = ranker.go_back()
     if pair:
+        csv_file = DB_DIR / f'{current_db}_ratings.csv'
+        ranker.save_to_csv(csv_file)
         return jsonify({'success': True, 'pair': pair})
     return jsonify({'success': False})
 
 @app.route('/rankings')
 def rankings():
+    ranker = rankers[current_db]
     return jsonify({'rankings': ranker.get_rankings()})
-
-@app.route('/save')
-def save():
-    ranker.save_state('rankings.json')
-    return jsonify({'success': True})
 
 if __name__ == '__main__':
     app.run(debug=True)
