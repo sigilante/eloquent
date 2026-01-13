@@ -1,0 +1,27 @@
+Make it executable:
+
+```bash
+chmod +x /var/www/elo-ranker/backups.sh
+```
+
+Add to crontab:
+
+```bash
+crontab -e
+
+# Add this line (runs every 15 minutes):
+*/15 * * * * /var/www/elo-ranker/backup_users.sh
+```
+
+Test it:
+
+```bash
+# Run manually first
+./backup_users.sh
+
+# Check backups
+ls -lh backups/
+
+# Verify cron is running
+sudo tail -f /var/log/syslog | grep CRON
+```

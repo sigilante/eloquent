@@ -1,1 +1,7 @@
-Flask==3.1.2
+flask
+flask-login
+flask-session
+pillow
+gunicorn
+redis
+Werkzeug

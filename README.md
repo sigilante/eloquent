@@ -29,6 +29,12 @@ This is a Python implementation of the same idea, with a simple key-driven brows
 
 6. Rank items by clicking on the left or right item, or pressing the left or right arrow key.  The selected item will gain Elo points, and the other item will lose points.  The up and down arrows move back in history and skip forwards, respectively.
 
+7. To serve to the web, use:
+
+    ```bash
+    gunicorn -w 4 -b 0.0.0.0:8000 --timeout 120 app:app
+    ```
+
 ## Data Sources
 
 Text lists are simply newline-delimited text files, with each line being an item to be ranked.
