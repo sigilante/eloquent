@@ -39,4 +39,5 @@ This is a Python implementation of the same idea, with a simple key-driven brows
 
 Text lists are simply newline-delimited text files, with each line being an item to be ranked.
 
-For example, the sample `actresses.txt` file contains a list of actresses, one per line, drawn from the [Encyclopedia Britannica](https://www.britannica.com/topic/list-of-actresses-2021631).  `books.txt` is [Modern Library's 100 Best Novels and 100 Best Nonfiction Books](https://sites.prh.com/modern-library-top-100/#top-100-novels).
+* `actresses.txt` file contains a list of actresses, one per line, drawn from the [Encyclopedia Britannica](https://www.britannica.com/topic/list-of-actresses-2021631).
+* `books.txt` is [Modern Library's 100 Best Novels and 100 Best Nonfiction Books](https://sites.prh.com/modern-library-top-100/#top-100-novels).
